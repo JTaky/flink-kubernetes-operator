@@ -19,6 +19,8 @@ package org.apache.flink.kubernetes.operator.reconciler.deployment;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ConfigurationUtils;
+import org.apache.flink.configuration.PipelineOptions;
 import org.apache.flink.kubernetes.configuration.KubernetesConfigOptions;
 import org.apache.flink.kubernetes.operator.api.AbstractFlinkResource;
 import org.apache.flink.kubernetes.operator.api.FlinkDeployment;
@@ -40,6 +42,7 @@ import org.apache.flink.kubernetes.operator.reconciler.Reconciler;
 import org.apache.flink.kubernetes.operator.reconciler.ReconciliationUtils;
 import org.apache.flink.kubernetes.operator.reconciler.diff.DiffResult;
 import org.apache.flink.kubernetes.operator.reconciler.diff.ReflectiveDiffBuilder;
+import org.apache.flink.kubernetes.operator.service.FlinkService;
 import org.apache.flink.kubernetes.operator.utils.EventRecorder;
 import org.apache.flink.kubernetes.operator.utils.FlinkUtils;
 import org.apache.flink.kubernetes.operator.utils.StatusRecorder;
@@ -54,6 +57,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -98,30 +102,6 @@ public abstract class AbstractFlinkResourceReconciler<
         this.configManager = configManager;
     }
 
-    private boolean prepareCrForRollback(
-            FlinkResourceContext<CR> ctx, SPEC currentDeploySpec, SPEC lastReconciledSpec) {
-        var cr = ctx.getResource();
-        var reconciliationStatus = cr.getStatus().getReconciliationStatus();
-        // Spec has changed while rolling back we should apply new spec and move to upgrading
-        // state
-        // Don't take in account changes on job.state as it could be overriden to running if the
-        // current spec is not valid
-        if (lastReconciledSpec.getJob() != null) {
-            lastReconciledSpec.getJob().setState(currentDeploySpec.getJob().getState());
-        }
-        var specDiffRollingBack =
-                new ReflectiveDiffBuilder<>(
-                                ctx.getDeploymentMode(), lastReconciledSpec, currentDeploySpec)
-                        .build();
-        if (DiffType.IGNORE != specDiffRollingBack.getType()) {
-            reconciliationStatus.setState(ReconciliationState.UPGRADING);
-        } else {
-            // Rely on the last stable spec if rolling back and no change in the spec
-            cr.setSpec(cr.getStatus().getReconciliationStatus().deserializeLastStableSpec());
-        }
-        return true;
-    }
-
     @Override
     public void reconcile(FlinkResourceContext<CR> ctx) throws Exception {
         var cr = ctx.getResource();
@@ -155,6 +135,8 @@ public abstract class AbstractFlinkResourceReconciler<
         SPEC lastReconciledSpec =
                 cr.getStatus().getReconciliationStatus().deserializeLastReconciledSpec();
         SPEC currentDeploySpec = cr.getSpec();
+        applyAutoscalerParallelismOverrides(
+                resourceScaler.getParallelismOverrides(ctx), currentDeploySpec);
 
         var specDiff =
                 new ReflectiveDiffBuilder<>(
@@ -177,9 +159,12 @@ public abstract class AbstractFlinkResourceReconciler<
                 return;
             }
             triggerSpecChangeEvent(cr, specDiff);
-            boolean reconciled =
-                    scale(ctx, deployConfig, diffType) || reconcileSpecChange(ctx, deployConfig);
-            if (reconciled) {
+
+            // Try scaling if this is not an upgrade change
+            boolean scaled = diffType != DiffType.UPGRADE && scale(ctx, deployConfig);
+
+            // Reconcile spec change unless scaling was enough
+            if (scaled || reconcileSpecChange(ctx, deployConfig)) {
                 // If we executed a scale or spec upgrade action we return, otherwise we
                 // continue to reconcile other changes
                 return;
@@ -201,7 +186,11 @@ public abstract class AbstractFlinkResourceReconciler<
                     EventRecorder.Component.JobManagerDeployment,
                     MSG_ROLLBACK);
         } else if (!reconcileOtherChanges(ctx)) {
-            if (!resourceScaler.scale(ctx)) {
+            if (resourceScaler.scale(ctx)) {
+                LOG.info(
+                        "Rescheduling new reconciliation immediately to execute scaling operation.");
+                status.setImmediateReconciliationNeeded(true);
+            } else {
                 LOG.info("Resource fully reconciled, nothing to do...");
             }
         }
@@ -280,7 +269,7 @@ public abstract class AbstractFlinkResourceReconciler<
 
     @Override
     public DeleteControl cleanup(FlinkResourceContext<CR> ctx) {
-        resourceScaler.cleanup(ctx.getResource());
+        resourceScaler.cleanup(ctx);
         return cleanupInternal(ctx);
     }
 
@@ -337,28 +326,54 @@ public abstract class AbstractFlinkResourceReconciler<
     }
 
     /**
+     * If there are any parallelism overrides by the {@link JobAutoScaler} apply them to the spec.
+     *
+     * @param autoscalerOverrides Parallelism overrides initiated by the autoscaler
+     * @param spec Current user spec
+     */
+    private void applyAutoscalerParallelismOverrides(
+            Map<String, String> autoscalerOverrides, SPEC spec) {
+
+        if (autoscalerOverrides.isEmpty()) {
+            return;
+        }
+
+        LOG.debug("Applying autoscaler parallelism overrides: {}", autoscalerOverrides);
+
+        var configMap = spec.getFlinkConfiguration();
+        var userOverridesStr =
+                configMap.getOrDefault(PipelineOptions.PARALLELISM_OVERRIDES.key(), "");
+        var userOverrides =
+                new HashMap<>(
+                        ConfigurationUtils.<Map<String, String>>convertValue(
+                                userOverridesStr, Map.class));
+
+        autoscalerOverrides.forEach(userOverrides::put);
+        configMap.put(
+                PipelineOptions.PARALLELISM_OVERRIDES.key(),
+                ConfigurationUtils.convertValue(userOverrides, String.class));
+    }
+
+    /**
      * Scale the cluster in-place if possible, either through reactive scaling or declarative
      * resources.
      *
      * @param ctx Resource context.
      * @param deployConfig Configuration to be deployed.
-     * @param diffType Spec change type.
      * @return True if the scaling is successful
      * @throws Exception
      */
-    private boolean scale(
-            FlinkResourceContext<CR> ctx, Configuration deployConfig, DiffType diffType)
+    private boolean scale(FlinkResourceContext<CR> ctx, Configuration deployConfig)
             throws Exception {
 
-        if (diffType == DiffType.UPGRADE) {
+        var scalingResult = ctx.getFlinkService().scale(ctx, deployConfig);
+        if (scalingResult == FlinkService.ScalingResult.CANNOT_SCALE) {
             return false;
         }
 
-        if (ctx.getFlinkService().scale(ctx)) {
-            ReconciliationUtils.updateAfterScaleUp(ctx.getResource(), deployConfig, clock);
-            return true;
-        }
-        return false;
+        ReconciliationUtils.updateAfterScaleUp(
+                ctx.getResource(), deployConfig, clock, scalingResult);
+        return true;
     }
 
     /**
@@ -444,6 +459,29 @@ public abstract class AbstractFlinkResourceReconciler<
             return true;
         }
         return false;
+    }
+
+    private boolean prepareCrForRollback(
+            FlinkResourceContext<CR> ctx, SPEC currentDeploySpec, SPEC lastReconciledSpec) {
+        var cr = ctx.getResource();
+        var reconciliationStatus = cr.getStatus().getReconciliationStatus();
+        // Spec has changed while rolling back we should apply new spec and move to upgrading
+        // state. Don't take in account changes on job.state as it could be overriden to running if
+        // the current spec is not valid
+        if (lastReconciledSpec.getJob() != null) {
+            lastReconciledSpec.getJob().setState(currentDeploySpec.getJob().getState());
+        }
+        var specDiffRollingBack =
+                new ReflectiveDiffBuilder<>(
+                                ctx.getDeploymentMode(), lastReconciledSpec, currentDeploySpec)
+                        .build();
+        if (DiffType.IGNORE != specDiffRollingBack.getType()) {
+            reconciliationStatus.setState(ReconciliationState.UPGRADING);
+        } else {
+            // Rely on the last stable spec if rolling back and no change in the spec
+            cr.setSpec(cr.getStatus().getReconciliationStatus().deserializeLastStableSpec());
+        }
+        return true;
     }
 
     /**

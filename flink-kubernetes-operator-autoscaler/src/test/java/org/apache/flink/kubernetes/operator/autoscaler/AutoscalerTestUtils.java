@@ -17,26 +17,17 @@
 
 package org.apache.flink.kubernetes.operator.autoscaler;
 
-import org.apache.flink.kubernetes.operator.reconciler.deployment.JobAutoScaler;
-import org.apache.flink.kubernetes.operator.reconciler.deployment.JobAutoScalerFactory;
-import org.apache.flink.kubernetes.operator.utils.EventRecorder;
+import org.apache.flink.kubernetes.operator.api.AbstractFlinkResource;
 
-import com.google.auto.service.AutoService;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import lombok.SneakyThrows;
 
-/**
- * Factory for loading JobAutoScalerImpl included in this module. This class will be dynamically
- * instantiated by the main operator module.
- */
-@AutoService(JobAutoScalerFactory.class)
-public class JobAutoscalerFactoryImpl implements JobAutoScalerFactory {
-    @Override
-    public JobAutoScaler create(KubernetesClient kubernetesClient, EventRecorder eventRecorder) {
-        return new JobAutoScalerImpl(
-                kubernetesClient,
-                new RestApiMetricsCollector(),
-                new ScalingMetricEvaluator(),
-                new ScalingExecutor(eventRecorder),
-                eventRecorder);
+/** Autoscaler test utilities. * */
+public class AutoscalerTestUtils {
+
+    @SneakyThrows
+    public static AutoScalerInfo getOrCreateInfo(
+            AbstractFlinkResource<?, ?> cr, KubernetesClient client) {
+        return new AutoscalerInfoManager(client).getOrCreateInfo(cr);
     }
 }

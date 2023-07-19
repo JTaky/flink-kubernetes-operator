@@ -40,7 +40,7 @@ import org.apache.flink.kubernetes.operator.api.status.SavepointFormatType;
 import org.apache.flink.kubernetes.operator.api.status.SavepointInfo;
 import org.apache.flink.kubernetes.operator.api.status.SavepointTriggerType;
 import org.apache.flink.kubernetes.operator.config.FlinkConfigBuilder;
-import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
+import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
 import org.apache.flink.kubernetes.operator.exception.RecoveryFailureException;
 import org.apache.flink.kubernetes.operator.observer.SavepointFetchResult;
@@ -68,6 +68,7 @@ import org.apache.flink.runtime.rest.messages.job.metrics.AggregatedMetric;
 import org.apache.flink.runtime.rest.messages.job.metrics.AggregatedMetricsResponseBody;
 import org.apache.flink.runtime.rest.messages.job.metrics.AggregatedSubtaskMetricsHeaders;
 import org.apache.flink.util.SerializedThrowable;
+import org.apache.flink.util.concurrent.Executors;
 
 import io.fabric8.kubernetes.api.model.DeletionPropagation;
 import io.fabric8.kubernetes.api.model.HasMetadata;
@@ -141,11 +142,15 @@ public class TestingFlinkService extends AbstractFlinkService {
     @Setter private boolean scalingCompleted;
 
     public TestingFlinkService() {
-        super(null, new FlinkConfigManager(new Configuration()));
+        this(null);
     }
 
     public TestingFlinkService(KubernetesClient kubernetesClient) {
-        super(kubernetesClient, new FlinkConfigManager(new Configuration()));
+        super(
+                kubernetesClient,
+                null,
+                Executors.newDirectExecutorService(),
+                FlinkOperatorConfiguration.fromConfiguration(new Configuration()));
     }
 
     public <T extends HasMetadata> Context<T> getContext() {
@@ -545,7 +550,7 @@ public class TestingFlinkService extends AbstractFlinkService {
     }
 
     @Override
-    public boolean scale(FlinkResourceContext<?> ctx) {
+    public ScalingResult scale(FlinkResourceContext<?> ctx, Configuration deployConfig) {
         boolean standalone = ctx.getDeploymentMode() == KubernetesDeploymentMode.STANDALONE;
         boolean session = ctx.getResource().getSpec().getJob() == null;
         boolean reactive =
@@ -558,10 +563,10 @@ public class TestingFlinkService extends AbstractFlinkService {
                             .get(
                                     StandaloneKubernetesConfigOptionsInternal
                                             .KUBERNETES_TASKMANAGER_REPLICAS);
-            return true;
+            return ScalingResult.SCALING_TRIGGERED;
         }
 
-        return false;
+        return ScalingResult.CANNOT_SCALE;
     }
 
     @Override

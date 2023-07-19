@@ -58,6 +58,8 @@ public class JobAutoScalerImpl implements JobAutoScaler {
     @VisibleForTesting
     final Map<ResourceID, AutoscalerFlinkMetrics> flinkMetrics = new ConcurrentHashMap<>();
 
+    @VisibleForTesting final AutoscalerInfoManager infoManager;
+
     public JobAutoScalerImpl(
             KubernetesClient kubernetesClient,
             ScalingMetricCollector metricsCollector,
@@ -69,19 +71,43 @@ public class JobAutoScalerImpl implements JobAutoScaler {
         this.evaluator = evaluator;
         this.scalingExecutor = scalingExecutor;
         this.eventRecorder = eventRecorder;
+        this.infoManager = new AutoscalerInfoManager(kubernetesClient);
     }
 
     @Override
-    public void cleanup(AbstractFlinkResource<?, ?> cr) {
+    public void cleanup(FlinkResourceContext<?> ctx) {
         LOG.info("Cleaning up autoscaling meta data");
+        var cr = ctx.getResource();
         metricsCollector.cleanup(cr);
         var resourceId = ResourceID.fromResource(cr);
         lastEvaluatedMetrics.remove(resourceId);
         flinkMetrics.remove(resourceId);
+        infoManager.removeInfoFromCache(cr);
     }
 
     @Override
-    public boolean scale(FlinkResourceContext<? extends AbstractFlinkResource<?, ?>> ctx) {
+    public Map<String, String> getParallelismOverrides(FlinkResourceContext<?> ctx) {
+        var conf = ctx.getObserveConfig();
+        try {
+            var infoOpt = infoManager.getInfo(ctx.getResource());
+            if (infoOpt.isPresent()) {
+                var info = infoOpt.get();
+                // If autoscaler was disabled need to delete the overrides
+                if (!conf.getBoolean(AUTOSCALER_ENABLED) && !info.getCurrentOverrides().isEmpty()) {
+                    info.removeCurrentOverrides();
+                    info.replaceInKubernetes(kubernetesClient);
+                } else {
+                    return info.getCurrentOverrides();
+                }
+            }
+        } catch (Exception e) {
+            LOG.error("Error while getting parallelism overrides", e);
+        }
+        return Map.of();
+    }
+
+    @Override
+    public boolean scale(FlinkResourceContext<?> ctx) {
 
         var conf = ctx.getObserveConfig();
         var resource = ctx.getResource();
@@ -90,7 +116,6 @@ public class JobAutoScalerImpl implements JobAutoScaler {
         Map<JobVertexID, Map<ScalingMetric, EvaluatedScalingMetric>> evaluatedMetrics = null;
 
         try {
-
             if (resource.getSpec().getJob() == null || !conf.getBoolean(AUTOSCALER_ENABLED)) {
                 LOG.debug("Job autoscaler is disabled");
                 return false;
@@ -106,7 +131,7 @@ public class JobAutoScalerImpl implements JobAutoScaler {
                 return false;
             }
 
-            var autoScalerInfo = AutoScalerInfo.forResource(resource, kubernetesClient);
+            var autoScalerInfo = infoManager.getOrCreateInfo(resource);
 
             var collectedMetrics =
                     metricsCollector.updateMetrics(

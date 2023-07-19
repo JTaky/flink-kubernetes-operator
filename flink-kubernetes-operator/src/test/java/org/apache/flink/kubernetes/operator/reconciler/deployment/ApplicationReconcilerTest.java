@@ -45,7 +45,9 @@ import org.apache.flink.kubernetes.operator.api.status.ReconciliationState;
 import org.apache.flink.kubernetes.operator.api.status.Savepoint;
 import org.apache.flink.kubernetes.operator.api.status.SavepointTriggerType;
 import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
+import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
+import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
 import org.apache.flink.kubernetes.operator.exception.RecoveryFailureException;
 import org.apache.flink.kubernetes.operator.health.ClusterHealthInfo;
 import org.apache.flink.kubernetes.operator.observer.ClusterHealthEvaluator;
@@ -59,6 +61,7 @@ import org.apache.flink.runtime.client.JobStatusMessage;
 import org.apache.flink.runtime.highavailability.JobResultStoreOptions;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.jobgraph.JobVertexResourceRequirements;
+import org.apache.flink.util.concurrent.Executors;
 
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -74,9 +77,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -101,6 +106,9 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
     @Getter private KubernetesClient kubernetesClient;
     private ApplicationReconciler appReconciler;
 
+    private FlinkOperatorConfiguration operatorConfig;
+    private ExecutorService executorService;
+
     @Override
     public void setup() {
         appReconciler =
@@ -111,6 +119,8 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
                         new NoopJobAutoscalerFactory(),
                         configManager);
         reconciler = new TestReconcilerAdapter<>(this, appReconciler);
+        operatorConfig = configManager.getOperatorConfiguration();
+        executorService = Executors.newDirectExecutorService();
     }
 
     @ParameterizedTest
@@ -647,12 +657,18 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
     @Test
     public void testScaleWithRescaleApi() throws Exception {
         var rescaleCounter = new AtomicInteger(0);
+        var v1 = new JobVertexID();
 
         // We create a service mocking out some methods we don't want to call explicitly
         var nativeService =
-                new NativeFlinkService(kubernetesClient, configManager, eventRecorder) {
+                new NativeFlinkService(
+                        kubernetesClient, null, executorService, operatorConfig, eventRecorder) {
 
-                    Map<JobVertexID, JobVertexResourceRequirements> submitted = Map.of();
+                    Map<JobVertexID, JobVertexResourceRequirements> submitted =
+                            Map.of(
+                                    v1,
+                                    new JobVertexResourceRequirements(
+                                            new JobVertexResourceRequirements.Parallelism(1, 1)));
 
                     @Override
                     protected Map<JobVertexID, JobVertexResourceRequirements> getVertexResources(
@@ -701,7 +717,6 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
         verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
 
         // Override parallelism for a vertex and trigger rescaling
-        var v1 = new JobVertexID();
         deployment
                 .getSpec()
                 .getFlinkConfiguration()
@@ -790,6 +805,111 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
                         .getJob()
                         .getState());
         assertEquals(1, rescaleCounter.get());
+    }
+
+    @Test
+    public void testApplyAutoscalerParallelism() throws Exception {
+        var ctxFactory =
+                new TestingFlinkResourceContextFactory(
+                        getKubernetesClient(),
+                        configManager,
+                        operatorMetricGroup,
+                        flinkService,
+                        eventRecorder);
+        var overrides = new HashMap<String, String>();
+        JobAutoScalerFactory autoscalerFactory =
+                (k, r) ->
+                        new NoopJobAutoscalerFactory() {
+                            @Override
+                            public Map<String, String> getParallelismOverrides(
+                                    FlinkResourceContext<?> ctx) {
+                                return new HashMap<>(overrides);
+                            }
+
+                            @Override
+                            public boolean scale(FlinkResourceContext<?> ctx) {
+                                return true;
+                            }
+                        };
+
+        appReconciler =
+                new ApplicationReconciler(
+                        kubernetesClient, eventRecorder, statusRecorder, autoscalerFactory);
+
+        var deployment = TestUtils.buildApplicationCluster();
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
+        assertFalse(deployment.getStatus().isImmediateReconciliationNeeded());
+
+        // Job running verify no upgrades if overrides are empty
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.DEPLOYED,
+                deployment.getStatus().getReconciliationStatus().getState());
+        assertEquals("RUNNING", deployment.getStatus().getJobStatus().getState());
+        assertTrue(deployment.getStatus().isImmediateReconciliationNeeded());
+
+        // Test when there are only overrides by the autoscaler
+        var v1 = new JobVertexID();
+        overrides.put(v1.toHexString(), "2");
+
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.UPGRADING,
+                deployment.getStatus().getReconciliationStatus().getState());
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.DEPLOYED,
+                deployment.getStatus().getReconciliationStatus().getState());
+        verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
+
+        assertEquals(
+                Map.of(v1.toHexString(), "2"),
+                ctxFactory
+                        .getResourceContext(deployment, context)
+                        .getObserveConfig()
+                        .get(PipelineOptions.PARALLELISM_OVERRIDES));
+
+        // Test when there are also user overrides, autoscaler should take precedence
+
+        // This should be ignored
+        deployment
+                .getSpec()
+                .getFlinkConfiguration()
+                .put(PipelineOptions.PARALLELISM_OVERRIDES.key(), v1 + ":1");
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.DEPLOYED,
+                deployment.getStatus().getReconciliationStatus().getState());
+        assertEquals(
+                Map.of(v1.toHexString(), "2"),
+                ctxFactory
+                        .getResourceContext(deployment, context)
+                        .getObserveConfig()
+                        .get(PipelineOptions.PARALLELISM_OVERRIDES));
+
+        // Define partly overlapping overrides
+        var v2 = new JobVertexID();
+        deployment
+                .getSpec()
+                .getFlinkConfiguration()
+                .put(PipelineOptions.PARALLELISM_OVERRIDES.key(), v1 + ":1," + v2 + ":4");
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.UPGRADING,
+                deployment.getStatus().getReconciliationStatus().getState());
+        appReconciler.reconcile(ctxFactory.getResourceContext(deployment, context));
+        assertEquals(
+                ReconciliationState.DEPLOYED,
+                deployment.getStatus().getReconciliationStatus().getState());
+        verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
+
+        assertEquals(
+                Map.of(v1.toString(), "2", v2.toString(), "4"),
+                ctxFactory
+                        .getResourceContext(deployment, context)
+                        .getObserveConfig()
+                        .get(PipelineOptions.PARALLELISM_OVERRIDES));
     }
 
     @ParameterizedTest
