@@ -47,15 +47,12 @@ public class SessionJobReconciler
 
     private static final Logger LOG = LoggerFactory.getLogger(SessionJobReconciler.class);
 
-    private final FlinkConfigManager configManager;
-
     public SessionJobReconciler(
             KubernetesClient kubernetesClient,
             EventRecorder eventRecorder,
             StatusRecorder<FlinkSessionJob, FlinkSessionJobStatus> statusRecorder,
             FlinkConfigManager configManager) {
-        super(kubernetesClient, eventRecorder, statusRecorder, new NoopJobAutoscalerFactory());
-        this.configManager = configManager;
+        super(kubernetesClient, eventRecorder, statusRecorder, new NoopJobAutoscalerFactory(), configManager);
     }
 
     @Override
@@ -107,7 +104,7 @@ public class SessionJobReconciler
             String jobID = ctx.getResource().getStatus().getJobStatus().getJobId();
             if (jobID != null) {
                 try {
-                    cancelJob(ctx, UpgradeMode.STATELESS);
+                    cancelJob(ctx);
                 } catch (ExecutionException e) {
                     final var cause = e.getCause();
 

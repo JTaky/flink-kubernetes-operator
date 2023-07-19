@@ -75,7 +75,8 @@ public class ReconcilerFactory {
                                     kubernetesClient,
                                     eventRecorder,
                                     deploymentStatusRecorder,
-                                    autoscalerFactory);
+                                    autoscalerFactory,
+                                    configManager);
                         default:
                             throw new UnsupportedOperationException(
                                     String.format("Unsupported running mode: %s", modes.f0));

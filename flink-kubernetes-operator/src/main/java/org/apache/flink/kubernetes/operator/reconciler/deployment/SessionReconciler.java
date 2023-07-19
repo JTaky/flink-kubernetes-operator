@@ -48,15 +48,13 @@ public class SessionReconciler
                 FlinkDeployment, FlinkDeploymentSpec, FlinkDeploymentStatus> {
 
     private static final Logger LOG = LoggerFactory.getLogger(SessionReconciler.class);
-    private final FlinkConfigManager configManager;
 
     public SessionReconciler(
             KubernetesClient kubernetesClient,
             EventRecorder eventRecorder,
             StatusRecorder<FlinkDeployment, FlinkDeploymentStatus> statusRecorder,
             FlinkConfigManager configManager) {
-        super(kubernetesClient, eventRecorder, statusRecorder, new NoopJobAutoscalerFactory());
-        this.configManager = configManager;
+        super(kubernetesClient, eventRecorder, statusRecorder, new NoopJobAutoscalerFactory(), configManager);
     }
 
     @Override

@@ -44,6 +44,7 @@ import org.apache.flink.kubernetes.operator.api.status.JobStatus;
 import org.apache.flink.kubernetes.operator.api.status.ReconciliationState;
 import org.apache.flink.kubernetes.operator.api.status.Savepoint;
 import org.apache.flink.kubernetes.operator.api.status.SavepointTriggerType;
+import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
 import org.apache.flink.kubernetes.operator.exception.RecoveryFailureException;
 import org.apache.flink.kubernetes.operator.health.ClusterHealthInfo;
@@ -107,8 +108,47 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
                         kubernetesClient,
                         eventRecorder,
                         statusRecorder,
-                        new NoopJobAutoscalerFactory());
+                        new NoopJobAutoscalerFactory(),
+                        configManager);
         reconciler = new TestReconcilerAdapter<>(this, appReconciler);
+    }
+
+    @ParameterizedTest
+    @MethodSource("org.apache.flink.kubernetes.operator.TestUtils#flinkVersions")
+    public void testSubmitAndCleanUpWithSavepoint(FlinkVersion flinkVersion) throws Exception {
+        // create reconciler with custom config
+        Configuration conf = new Configuration();
+        conf.set(
+                KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION,
+                true);
+        FlinkConfigManager configManager = new FlinkConfigManager(conf);
+        ApplicationReconciler appReconciler =
+                new ApplicationReconciler(
+                        kubernetesClient,
+                        eventRecorder,
+                        statusRecorder,
+                        new NoopJobAutoscalerFactory(),
+                        configManager);
+        TestReconcilerAdapter<FlinkDeployment, FlinkDeploymentSpec, FlinkDeploymentStatus> reconcilerWithSavepointOnDeletion =
+                new TestReconcilerAdapter<>(this, appReconciler);
+        FlinkDeployment deployment = TestUtils.buildApplicationCluster(flinkVersion);
+
+        // session ready
+        reconcilerWithSavepointOnDeletion.reconcile(deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
+
+        // clean up
+        assertEquals(
+                null, deployment.getStatus().getJobStatus().getSavepointInfo().getLastSavepoint());
+        reconcilerWithSavepointOnDeletion.cleanup(deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        assertEquals(
+                "savepoint_0",
+                deployment
+                        .getStatus()
+                        .getJobStatus()
+                        .getSavepointInfo()
+                        .getLastSavepoint()
+                        .getLocation());
     }
 
     @ParameterizedTest

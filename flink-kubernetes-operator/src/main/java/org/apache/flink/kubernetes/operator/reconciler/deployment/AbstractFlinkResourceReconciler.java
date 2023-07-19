@@ -33,6 +33,7 @@ import org.apache.flink.kubernetes.operator.api.status.JobManagerDeploymentStatu
 import org.apache.flink.kubernetes.operator.api.status.ReconciliationState;
 import org.apache.flink.kubernetes.operator.api.status.Savepoint;
 import org.apache.flink.kubernetes.operator.api.status.SavepointTriggerType;
+import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
 import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
 import org.apache.flink.kubernetes.operator.reconciler.Reconciler;
@@ -74,6 +75,7 @@ public abstract class AbstractFlinkResourceReconciler<
     protected final StatusRecorder<CR, STATUS> statusRecorder;
     protected final KubernetesClient kubernetesClient;
     protected final JobAutoScaler resourceScaler;
+    protected final FlinkConfigManager configManager;
 
     public static final String MSG_SUSPENDED = "Suspending existing deployment.";
     public static final String MSG_SPEC_CHANGED =
@@ -87,11 +89,13 @@ public abstract class AbstractFlinkResourceReconciler<
             KubernetesClient kubernetesClient,
             EventRecorder eventRecorder,
             StatusRecorder<CR, STATUS> statusRecorder,
-            JobAutoScalerFactory autoscalerFactory) {
+            JobAutoScalerFactory autoscalerFactory,
+            FlinkConfigManager configManager) {
         this.kubernetesClient = kubernetesClient;
         this.eventRecorder = eventRecorder;
         this.statusRecorder = statusRecorder;
         this.resourceScaler = autoscalerFactory.create(kubernetesClient, eventRecorder);
+        this.configManager = configManager;
     }
 
     private boolean prepareCrForRollback(

@@ -92,6 +92,42 @@ public class SessionJobReconcilerTest extends OperatorTestBase {
     }
 
     @Test
+    public void testSubmitAndCleanUpWithSavepoint() throws Exception {
+        // create session job reconciler with custom config
+        Configuration conf = new Configuration();
+        conf.set(
+                KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION,
+                true);
+        FlinkConfigManager configManager = new FlinkConfigManager(conf);
+        SessionJobReconciler sessionJobReconciler =
+                new SessionJobReconciler(
+                        kubernetesClient,
+                        eventRecorder,
+                        statusRecorder,
+                        configManager);
+        TestReconcilerAdapter<FlinkSessionJob, FlinkSessionJobSpec, FlinkSessionJobStatus> reconcilerWithSavepointOnDeletion =
+                new TestReconcilerAdapter<>(this, sessionJobReconciler);
+        FlinkSessionJob sessionJob = TestUtils.buildSessionJob();
+
+        // session ready
+        reconcilerWithSavepointOnDeletion.reconcile(sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
+        assertEquals(1, flinkService.listJobs().size());
+        verifyAndSetRunningJobsToStatus(
+                sessionJob, JobState.RUNNING, RECONCILING.name(), null, flinkService.listJobs());
+
+        // clean up
+        reconcilerWithSavepointOnDeletion.cleanup(sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
+        assertEquals(
+                "savepoint_0",
+                sessionJob
+                        .getStatus()
+                        .getJobStatus()
+                        .getSavepointInfo()
+                        .getLastSavepoint()
+                        .getLocation());
+    }
+
+    @Test
     public void testSubmitAndCleanUp() throws Exception {
         FlinkSessionJob sessionJob = TestUtils.buildSessionJob();
 
