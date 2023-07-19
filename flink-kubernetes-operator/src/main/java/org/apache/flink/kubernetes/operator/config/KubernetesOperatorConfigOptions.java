@@ -531,5 +531,6 @@ public class KubernetesOperatorConfigOptions {
             operatorConfig("savepoint.on.deletion")
                     .booleanType()
                     .defaultValue(false)
-                    .withDescription("Indicate whether a savepoint must be taken when deleting a FlinkDeployment or FlinkSessionJob.");
+                    .withDescription(
+                            "Indicate whether a savepoint must be taken when deleting a FlinkDeployment or FlinkSessionJob.");
 }

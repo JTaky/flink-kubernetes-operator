@@ -128,9 +128,7 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
     public void testSubmitAndCleanUpWithSavepoint(FlinkVersion flinkVersion) throws Exception {
         // create reconciler with custom config
         Configuration conf = new Configuration();
-        conf.set(
-                KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION,
-                true);
+        conf.set(KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION, true);
         FlinkConfigManager configManager = new FlinkConfigManager(conf);
         ApplicationReconciler appReconciler =
                 new ApplicationReconciler(
@@ -139,18 +137,21 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
                         statusRecorder,
                         new NoopJobAutoscalerFactory(),
                         configManager);
-        TestReconcilerAdapter<FlinkDeployment, FlinkDeploymentSpec, FlinkDeploymentStatus> reconcilerWithSavepointOnDeletion =
-                new TestReconcilerAdapter<>(this, appReconciler);
+        TestReconcilerAdapter<FlinkDeployment, FlinkDeploymentSpec, FlinkDeploymentStatus>
+                reconcilerWithSavepointOnDeletion =
+                        new TestReconcilerAdapter<>(this, appReconciler);
         FlinkDeployment deployment = TestUtils.buildApplicationCluster(flinkVersion);
 
         // session ready
-        reconcilerWithSavepointOnDeletion.reconcile(deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        reconcilerWithSavepointOnDeletion.reconcile(
+                deployment, TestUtils.createContextWithReadyFlinkDeployment());
         verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
 
         // clean up
         assertEquals(
                 null, deployment.getStatus().getJobStatus().getSavepointInfo().getLastSavepoint());
-        reconcilerWithSavepointOnDeletion.cleanup(deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        reconcilerWithSavepointOnDeletion.cleanup(
+                deployment, TestUtils.createContextWithReadyFlinkDeployment());
         assertEquals(
                 "savepoint_0",
                 deployment

@@ -54,7 +54,12 @@ public class SessionReconciler
             EventRecorder eventRecorder,
             StatusRecorder<FlinkDeployment, FlinkDeploymentStatus> statusRecorder,
             FlinkConfigManager configManager) {
-        super(kubernetesClient, eventRecorder, statusRecorder, new NoopJobAutoscalerFactory(), configManager);
+        super(
+                kubernetesClient,
+                eventRecorder,
+                statusRecorder,
+                new NoopJobAutoscalerFactory(),
+                configManager);
     }
 
     @Override

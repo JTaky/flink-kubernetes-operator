@@ -294,9 +294,11 @@ public abstract class AbstractJobReconciler<
         restoreJob(ctx, specToRecover, ctx.getObserveConfig(), requireHaMetadata);
     }
 
-    protected void cancelJob(FlinkResourceContext<CR> ctx)
-            throws Exception {
-        UpgradeMode upgradeMode = configManager.getOperatorConfiguration().isSavepointOnDeletion() ? UpgradeMode.SAVEPOINT : UpgradeMode.STATELESS;
+    protected void cancelJob(FlinkResourceContext<CR> ctx) throws Exception {
+        UpgradeMode upgradeMode =
+                configManager.getOperatorConfiguration().isSavepointOnDeletion()
+                        ? UpgradeMode.SAVEPOINT
+                        : UpgradeMode.STATELESS;
         cancelJob(ctx, upgradeMode);
     }
 
