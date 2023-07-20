@@ -66,17 +66,13 @@ public class ReconcilerFactory {
                     switch (modes.f0) {
                         case SESSION:
                             return new SessionReconciler(
-                                    kubernetesClient,
-                                    eventRecorder,
-                                    deploymentStatusRecorder,
-                                    configManager);
+                                    kubernetesClient, eventRecorder, deploymentStatusRecorder);
                         case APPLICATION:
                             return new ApplicationReconciler(
                                     kubernetesClient,
                                     eventRecorder,
                                     deploymentStatusRecorder,
-                                    autoscalerFactory,
-                                    configManager);
+                                    autoscalerFactory);
                         default:
                             throw new UnsupportedOperationException(
                                     String.format("Unsupported running mode: %s", modes.f0));

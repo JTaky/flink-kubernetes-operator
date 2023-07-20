@@ -26,7 +26,6 @@ import org.apache.flink.kubernetes.operator.api.spec.JobState;
 import org.apache.flink.kubernetes.operator.api.spec.UpgradeMode;
 import org.apache.flink.kubernetes.operator.api.status.CommonStatus;
 import org.apache.flink.kubernetes.operator.api.status.JobStatus;
-import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
 import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
 import org.apache.flink.kubernetes.operator.reconciler.ReconciliationUtils;
@@ -63,9 +62,8 @@ public abstract class AbstractJobReconciler<
             KubernetesClient kubernetesClient,
             EventRecorder eventRecorder,
             StatusRecorder<CR, STATUS> statusRecorder,
-            JobAutoScalerFactory autoscalerFactory,
-            FlinkConfigManager configManager) {
-        super(kubernetesClient, eventRecorder, statusRecorder, autoscalerFactory, configManager);
+            JobAutoScalerFactory autoscalerFactory) {
+        super(kubernetesClient, eventRecorder, statusRecorder, autoscalerFactory);
     }
 
     @Override
@@ -292,14 +290,6 @@ public abstract class AbstractJobReconciler<
             specToRecover.getJob().setUpgradeMode(UpgradeMode.LAST_STATE);
         }
         restoreJob(ctx, specToRecover, ctx.getObserveConfig(), requireHaMetadata);
-    }
-
-    protected void cancelJob(FlinkResourceContext<CR> ctx) throws Exception {
-        UpgradeMode upgradeMode =
-                configManager.getOperatorConfiguration().isSavepointOnDeletion()
-                        ? UpgradeMode.SAVEPOINT
-                        : UpgradeMode.STATELESS;
-        cancelJob(ctx, upgradeMode);
     }
 
     /**

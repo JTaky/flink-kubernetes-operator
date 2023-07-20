@@ -28,7 +28,6 @@ import org.apache.flink.kubernetes.operator.api.spec.FlinkDeploymentSpec;
 import org.apache.flink.kubernetes.operator.api.spec.UpgradeMode;
 import org.apache.flink.kubernetes.operator.api.status.FlinkDeploymentStatus;
 import org.apache.flink.kubernetes.operator.api.status.JobManagerDeploymentStatus;
-import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
 import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
 import org.apache.flink.kubernetes.operator.exception.RecoveryFailureException;
@@ -68,9 +67,8 @@ public class ApplicationReconciler
             KubernetesClient kubernetesClient,
             EventRecorder eventRecorder,
             StatusRecorder<FlinkDeployment, FlinkDeploymentStatus> statusRecorder,
-            JobAutoScalerFactory autoscalerFactory,
-            FlinkConfigManager configManager) {
-        super(kubernetesClient, eventRecorder, statusRecorder, autoscalerFactory, configManager);
+            JobAutoScalerFactory autoscalerFactory) {
+        super(kubernetesClient, eventRecorder, statusRecorder, autoscalerFactory);
     }
 
     @Override
@@ -364,7 +362,11 @@ public class ApplicationReconciler
             ctx.getFlinkService()
                     .deleteClusterDeployment(deployment.getMetadata(), status, conf, true);
         } else {
-            cancelJob(ctx);
+            UpgradeMode upgradeMode =
+                    ctx.getOperatorConfig().isSavepointOnDeletion()
+                            ? UpgradeMode.SAVEPOINT
+                            : UpgradeMode.STATELESS;
+            cancelJob(ctx, upgradeMode);
         }
         return DeleteControl.defaultDelete();
     }

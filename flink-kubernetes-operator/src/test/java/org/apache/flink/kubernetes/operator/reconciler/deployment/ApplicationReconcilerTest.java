@@ -44,7 +44,6 @@ import org.apache.flink.kubernetes.operator.api.status.JobStatus;
 import org.apache.flink.kubernetes.operator.api.status.ReconciliationState;
 import org.apache.flink.kubernetes.operator.api.status.Savepoint;
 import org.apache.flink.kubernetes.operator.api.status.SavepointTriggerType;
-import org.apache.flink.kubernetes.operator.config.FlinkConfigManager;
 import org.apache.flink.kubernetes.operator.config.FlinkOperatorConfiguration;
 import org.apache.flink.kubernetes.operator.config.KubernetesOperatorConfigOptions;
 import org.apache.flink.kubernetes.operator.controller.FlinkResourceContext;
@@ -116,8 +115,7 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
                         kubernetesClient,
                         eventRecorder,
                         statusRecorder,
-                        new NoopJobAutoscalerFactory(),
-                        configManager);
+                        new NoopJobAutoscalerFactory());
         reconciler = new TestReconcilerAdapter<>(this, appReconciler);
         operatorConfig = configManager.getOperatorConfiguration();
         executorService = Executors.newDirectExecutorService();
@@ -126,32 +124,20 @@ public class ApplicationReconcilerTest extends OperatorTestBase {
     @ParameterizedTest
     @MethodSource("org.apache.flink.kubernetes.operator.TestUtils#flinkVersions")
     public void testSubmitAndCleanUpWithSavepoint(FlinkVersion flinkVersion) throws Exception {
-        // create reconciler with custom config
-        Configuration conf = new Configuration();
+        var conf = configManager.getDefaultConfig();
         conf.set(KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION, true);
-        FlinkConfigManager configManager = new FlinkConfigManager(conf);
-        ApplicationReconciler appReconciler =
-                new ApplicationReconciler(
-                        kubernetesClient,
-                        eventRecorder,
-                        statusRecorder,
-                        new NoopJobAutoscalerFactory(),
-                        configManager);
-        TestReconcilerAdapter<FlinkDeployment, FlinkDeploymentSpec, FlinkDeploymentStatus>
-                reconcilerWithSavepointOnDeletion =
-                        new TestReconcilerAdapter<>(this, appReconciler);
+        configManager.updateDefaultConfig(conf);
+
         FlinkDeployment deployment = TestUtils.buildApplicationCluster(flinkVersion);
 
         // session ready
-        reconcilerWithSavepointOnDeletion.reconcile(
-                deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        reconciler.reconcile(deployment, TestUtils.createContextWithReadyFlinkDeployment());
         verifyAndSetRunningJobsToStatus(deployment, flinkService.listJobs());
 
         // clean up
         assertEquals(
                 null, deployment.getStatus().getJobStatus().getSavepointInfo().getLastSavepoint());
-        reconcilerWithSavepointOnDeletion.cleanup(
-                deployment, TestUtils.createContextWithReadyFlinkDeployment());
+        reconciler.cleanup(deployment, TestUtils.createContextWithReadyFlinkDeployment());
         assertEquals(
                 "savepoint_0",
                 deployment

@@ -87,34 +87,25 @@ public class SessionJobReconcilerTest extends OperatorTestBase {
         reconciler =
                 new TestReconcilerAdapter<>(
                         this,
-                        new SessionJobReconciler(
-                                kubernetesClient, eventRecorder, statusRecorder, configManager));
+                        new SessionJobReconciler(kubernetesClient, eventRecorder, statusRecorder));
     }
 
     @Test
     public void testSubmitAndCleanUpWithSavepoint() throws Exception {
-        // create session job reconciler with custom config
-        Configuration conf = new Configuration();
+        var conf = configManager.getDefaultConfig();
         conf.set(KubernetesOperatorConfigOptions.SAVEPOINT_ON_DELETION, true);
-        FlinkConfigManager configManager = new FlinkConfigManager(conf);
-        SessionJobReconciler sessionJobReconciler =
-                new SessionJobReconciler(
-                        kubernetesClient, eventRecorder, statusRecorder, configManager);
-        TestReconcilerAdapter<FlinkSessionJob, FlinkSessionJobSpec, FlinkSessionJobStatus>
-                reconcilerWithSavepointOnDeletion =
-                        new TestReconcilerAdapter<>(this, sessionJobReconciler);
+        configManager.updateDefaultConfig(conf);
+
         FlinkSessionJob sessionJob = TestUtils.buildSessionJob();
 
         // session ready
-        reconcilerWithSavepointOnDeletion.reconcile(
-                sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
+        reconciler.reconcile(sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
         assertEquals(1, flinkService.listJobs().size());
         verifyAndSetRunningJobsToStatus(
                 sessionJob, JobState.RUNNING, RECONCILING.name(), null, flinkService.listJobs());
 
         // clean up
-        reconcilerWithSavepointOnDeletion.cleanup(
-                sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
+        reconciler.cleanup(sessionJob, TestUtils.createContextWithReadyFlinkDeployment());
         assertEquals(
                 "savepoint_0",
                 sessionJob
